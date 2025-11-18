@@ -16,6 +16,31 @@
 > macOS:  
 > `sudo security add-trusted-cert -d -p ssl -p basic -k /Library/Keychains/System.keychain ~/.mitmproxy/mitmproxy-ca-cert.pem`
 
+## 选项
+
+### 指定 mitmproxy 服务端口
+
+通过`-p`选项可以指定代理服务器的端口，如下所示：
+
+`./wxdown-service -p 65000`
+
+### 指定 websocket 服务端口
+
+通过`-w`选项可以指定websocket服务端口，如下所示：
+
+`./wxdown-service -w 65001`
+
+### 调试模式运行
+
+通过`-d`选项可以开启调试模式，会打印更多日志信息：
+
+`./wxdown-service -d`
+
+### 查看版本号
+
+`./wxdown-service -v`
+
+
 ## 自定义构建
 
 由于 macOS 系统要求必须签名才能分发应用程序，所以从 [Releases](https://github.com/wechat-article/wxdown-service/releases) 下载的 macOS 版本不一定能用，这种情况下
