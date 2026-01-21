@@ -51,6 +51,7 @@
 ### 1. 下载源码
 ```shell
 git clone git@github.com:wechat-article/wxdown-service.git
+cd wxdown-service
 ```
 
 ### 2. 配置环境 & 安装依赖
