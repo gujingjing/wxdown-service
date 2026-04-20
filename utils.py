@@ -19,7 +19,9 @@ def check_system_proxy(mitm_proxy_address):
     proxy_obj = urllib.request.getproxies()
     details = f'将系统代理设置为 [bold green]{mitm_proxy_address.removeprefix('http://')}[/]\n当前系统代理为:\n{proxy_obj}'
 
-    if proxy_obj.keys() < {'http', 'https'}:
+    # 注意：Windows 下 urllib.request.getproxies() 可能返回 {'no': '...'}（ProxyOverride 例外列表）
+    # 等非 http/https 的 key；所以只能正向判断，不能用 "<"（真子集）判断。
+    if 'http' not in proxy_obj or 'https' not in proxy_obj:
         return False, '检测到系统的网络代理设置不正确（http/https 都需要设置）', details
     if proxy_obj['http'] != mitm_proxy_address or proxy_obj['https'] != mitm_proxy_address:
         return False, '检测到系统的网络代理未指向 mitmproxy', details

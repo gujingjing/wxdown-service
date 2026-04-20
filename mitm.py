@@ -24,7 +24,11 @@ def mitmproxy_process(args: list[str], output_queue: multiprocessing.Queue):
         os.environ.pop(k, None)
     while True:
         print(f'Run mitmdump process {args} ({os.getpid()})...', flush=True)
-        mitmdump(args)
+        try:
+            mitmdump(args)
+        except KeyboardInterrupt:
+            # mitmdump 通常会吞掉 SIGINT 然后正常 return；这里是为了处理它透传上来的极少数情况
+            break
         logger.info(f'mitmdump process terminated')
         time.sleep(3)
         logger.info(f'重启 mitm 进程')
@@ -39,6 +43,7 @@ def start(port: str, debug = False):
 
     start_time = time.time()
     proxy_address = None
+    error_line = None
 
     while time.time() - start_time < 10:
         try:
@@ -50,13 +55,14 @@ def start(port: str, debug = False):
                 proxy_address = f"http://127.0.0.1:{port}"
                 break
             elif "address already in use" in line.lower():
+                error_line = line
                 break
         except queue.Empty:
             pass
 
     threading.Thread(target=log_mitmproxy_output, args=(mitm_output_queue, debug), daemon=True).start()
 
-    return proxy_address
+    return proxy_address, error_line
 
 
 def log_mitmproxy_output(mitm_output_queue: multiprocessing.Queue, debug):

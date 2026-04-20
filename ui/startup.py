@@ -1,4 +1,5 @@
 import multiprocessing
+from pathlib import Path
 
 from rich.layout import Layout
 
@@ -34,10 +35,20 @@ def startup_ui_loop(watcher_output_queue: multiprocessing.Queue, mitm_proxy_addr
             # 检查证书是否安装
             try:
                 if not cert.is_certificate_installed('mitmproxy'):
+                    # 用 Python 先把 ~ / %userprofile% 展开为绝对路径，避免
+                    # PowerShell 不认 %userprofile%、导致 certutil 报
+                    # ERROR_PATH_NOT_FOUND 的经典坑。这条命令在 cmd / PowerShell /
+                    # Windows Terminal / bash / zsh 下都能直接粘贴执行。
+                    mitm_dir = Path.home() / '.mitmproxy'
                     if platform.system() == 'Windows':
-                        cmd = 'certutil -addstore root %userprofile%\\.mitmproxy\\mitmproxy-ca-cert.cer'
+                        cer_path = mitm_dir / 'mitmproxy-ca-cert.cer'
+                        cmd = f'certutil -addstore root "{cer_path}"'
                     elif platform.system() == 'Darwin':
-                        cmd = 'sudo security add-trusted-cert -d -p ssl -p basic -k /Library/Keychains/System.keychain ~/.mitmproxy/mitmproxy-ca-cert.pem'
+                        pem_path = mitm_dir / 'mitmproxy-ca-cert.pem'
+                        cmd = (f'sudo security add-trusted-cert -d -p ssl -p basic '
+                               f'-k /Library/Keychains/System.keychain "{pem_path}"')
+                    else:
+                        cmd = '(当前系统暂不支持自动给出安装命令)'
 
                     layout['status'].update(
                         StatusPanel(is_success=False, reason="系统中未检测到 mitmproxy 的证书，请手动安装。",

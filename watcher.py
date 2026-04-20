@@ -166,6 +166,7 @@ def start(port: str):
 
     start_time = time.time()
     ws_address = None
+    error_line = None
 
     while time.time() - start_time < 10:
         try:
@@ -175,9 +176,12 @@ def start(port: str):
                 port = match.group(1)
                 ws_address = f"wss://127.0.0.1:{port}"
                 break
-            elif "address already in use" in line.lower() or "watcher启动失败" in line:
+            elif ("address already in use" in line.lower()
+                    or "watcher启动失败" in line
+                    or "wss 证书启动失败" in line):
+                error_line = line
                 break
         except queue.Empty:
             pass
 
-    return ws_address, watcher_output_queue
+    return ws_address, watcher_output_queue, error_line
