@@ -19,6 +19,27 @@ class ExtractWxCredentials:
             help="指定 Credentials.json 文件路径",
         )
 
+    def running(self):
+        # mitmproxy 在同进程内重启（mitm.py 的 while True）时，本类会重新实例化，
+        # self.cookies 为空；此时第一次写入会用空字典覆盖磁盘上累计的历史凭证。
+        # 在服务就绪后把已有文件读回内存，避免数据丢失。
+        path = mitmproxy.ctx.options.credentials
+        if not path:
+            return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            if not content:
+                return
+            for item in json.loads(content):
+                biz = item.get('biz')
+                if biz:
+                    self.cookies[biz] = item
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"加载已有 credentials.json 失败: {e}")
+
     def response(self, flow: mitmproxy.http.HTTPFlow):
         # 检查请求的 URL 是否符合过滤器
         parsed_url = urlparse(flow.request.url)

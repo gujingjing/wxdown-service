@@ -13,7 +13,7 @@
 > windows:  
 > `certutil -addstore root %userprofile%\.mitmproxy\mitmproxy-ca-cert.cer`
 > 
-> macOS:  
+> macOS(注意: 下面是一条指令，太长可能换行):  
 > `sudo security add-trusted-cert -d -p ssl -p basic -k /Library/Keychains/System.keychain ~/.mitmproxy/mitmproxy-ca-cert.pem`
 
 ## 选项

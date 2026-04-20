@@ -1,11 +1,14 @@
 import io
 import multiprocessing
-import re
+import ssl
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 import version as __version
 from logger import logger
+
+MITM_CA_PEM = Path.home() / '.mitmproxy' / 'mitmproxy-ca-cert.pem'
 
 SRC_PATH = Path.absolute(Path(__file__)).parent
 LOGO_FILE = str(SRC_PATH / 'resources' / 'logo.txt')
@@ -17,40 +20,47 @@ def check_system_proxy(mitm_proxy_address):
     details = f'将系统代理设置为 [bold green]{mitm_proxy_address.removeprefix('http://')}[/]\n当前系统代理为:\n{proxy_obj}'
 
     if proxy_obj.keys() < {'http', 'https'}:
-        # http/https代理需要全部设置
-        success = False
-    elif proxy_obj['http'] != mitm_proxy_address or proxy_obj['https'] != mitm_proxy_address:
-        success = False
-    else:
-        success = True
+        return False, '检测到系统的网络代理设置不正确（http/https 都需要设置）', details
+    if proxy_obj['http'] != mitm_proxy_address or proxy_obj['https'] != mitm_proxy_address:
+        return False, '检测到系统的网络代理未指向 mitmproxy', details
 
-    if not success:
-        return False, '检测到系统的网络代理设置不正确', details
-
-
-    # 检测流量是否经过 mitmproxy
-    try:
-        with urllib.request.urlopen('http://mitm.it', timeout=10) as response:
-            content = response.read().decode('utf-8')
-            traffic_not_passing = re.search(r'If you can see this, traffic is not passing through mitmproxy', content)
-            if traffic_not_passing:
-                return False, '流量未经过 mitmproxy', ''
-    except TimeoutError as e:
-        logger.warning(f'检查http://mitm.it时超时: {e}')
-        return False, '检查代理超时，请稍后重试', '5秒后会自动重试'
-    except Exception as e:
-        logger.error(f'检查http://mitm.it时异常: {e}')
-
+    # 做一次真实的 HTTPS 探测：
+    #   - 走通 ⇒ 代理链路通、mitmproxy 能 MITM、上游出网正常
+    #   - SSL 错误 ⇒ 本机 mitmproxy CA 未被信任 或 证书文件与实际拦截不一致
+    #   - 超时/其他 ⇒ 上游不可达（防火墙/杀软/上游代理死循环等）
+    # 用 mitmproxy 自己的 CA 做 trust anchor，这样 PyInstaller 打包后不依赖系统证书库。
+    ctx = ssl.create_default_context()
+    if MITM_CA_PEM.exists():
         try:
-            with urllib.request.urlopen('http://example.com', timeout=10) as response:
-                logger.info('fetch http://example.com success')
+            ctx.load_verify_locations(cafile=str(MITM_CA_PEM))
         except Exception as e:
-            logger.error(f'fetch http://example.com failed: {e}')
+            logger.warning(f'加载 mitmproxy CA 失败: {e}')
 
-        return False, '检查代理失败', '请联系开发者，并提供日志文件'
-
-
-    return True, '成功', proxy_obj
+    probe_url = 'https://mp.weixin.qq.com/favicon.ico'
+    try:
+        with urllib.request.urlopen(probe_url, timeout=10, context=ctx) as response:
+            response.read(1)
+        return True, '成功', proxy_obj
+    except urllib.error.URLError as e:
+        reason = str(getattr(e, 'reason', e))
+        logger.error(f'HTTPS 探测失败: {reason}')
+        up = reason.upper()
+        if 'CERTIFICATE' in up or 'SSL' in up or 'CERT' in up:
+            return False, 'HTTPS 证书校验失败', (
+                '本机 mitmproxy CA 与实际拦截到的证书不一致，可能是系统内存在旧的 mitmproxy 证书。\n'
+                '请删除旧证书后重新安装 ~/.mitmproxy/mitmproxy-ca-cert.pem，并设为"始终信任"。\n'
+                f'原始错误: {reason}'
+            )
+        return False, '通过代理访问 HTTPS 失败', (
+            '可能原因：mitmproxy 无法出网（防火墙/杀软拦截），'
+            '或启动前 shell 中已存在 HTTP(S)_PROXY 环境变量导致 mitmproxy 把自己当作上游代理产生死循环。\n'
+            f'原始错误: {reason}'
+        )
+    except TimeoutError:
+        return False, '通过代理访问 HTTPS 超时', '请检查网络或防火墙设置，5 秒后会自动重试'
+    except Exception as e:
+        logger.error(f'HTTPS 探测异常: {e}')
+        return False, '通过代理访问 HTTPS 异常', f'{e}\n请将日志文件发送给开发者'
 
 
 def get_version():

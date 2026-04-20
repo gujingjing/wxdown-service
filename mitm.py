@@ -19,6 +19,9 @@ CREDENTIALS_FILE = str(SRC_PATH / 'resources' / 'data' / 'credentials.json')
 
 def mitmproxy_process(args: list[str], output_queue: multiprocessing.Queue):
     sys.stdout = sys.stderr = utils.Capture(output_queue)
+    # 清除继承自父进程/用户 shell 的代理环境变量，防止 mitmproxy 把自己当作上游代理导致死循环
+    for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'):
+        os.environ.pop(k, None)
     while True:
         print(f'Run mitmdump process {args} ({os.getpid()})...', flush=True)
         mitmdump(args)
@@ -46,7 +49,7 @@ def start(port: str, debug = False):
                 port = match.group(1)
                 proxy_address = f"http://127.0.0.1:{port}"
                 break
-            elif "address already in use" in line:
+            elif "address already in use" in line.lower():
                 break
         except queue.Empty:
             pass
