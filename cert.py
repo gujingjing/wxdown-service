@@ -32,17 +32,40 @@ def is_certificate_installed(cert_name='mitmproxy'):
         return False
 
     if platform.system() == 'Windows':
-        import wincertstore
+        # 证书必须在 Trusted Root (ROOT) store 里浏览器 / OS 才真正信任它，
+        # 放在 MY (Personal) 或 CA (Intermediate) 里浏览器不会信（这是我们
+        # 之前会误判"已安装"但浏览器依然报证书错误的根因）。
+        #
+        # certutil -addstore root "..." 在有/无管理员权限时落盘位置不同：
+        #   - 有管理员：LocalMachine\Root
+        #   - 无管理员：CurrentUser\Root
+        # 两个位置浏览器都会读，我们也都要查一遍。
+        def _root_store_contains(extra_args):
+            try:
+                result = subprocess.run(
+                    ['certutil', *extra_args, '-store', 'root', cert_name],
+                    capture_output=True, timeout=5,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                return False
+            if result.returncode != 0:
+                return False
+            # "(sha1):" 标签在中英文 Windows 下都一致；冒号兼容全角以防万一。
+            # 用 utf-8 + replace 解码：即便 certutil 在中文系统输出 GBK，
+            # 哈希行里的字节仍是 ASCII，不受影响。
+            text = result.stdout.decode('utf-8', errors='replace')
+            for m in re.finditer(r'\(sha1\)\s*[:：]\s*([0-9a-fA-F ]+)', text, re.IGNORECASE):
+                fp = m.group(1).replace(' ', '').upper()
+                if fp == local_fp:
+                    return True
+            return False
 
-        stores = ["MY", "ROOT", "CA"]
-        for store_name in stores:
-            with wincertstore.CertSystemStore(store_name) as store:
-                for cert in store.itercerts():
-                    if cert.get_name() != cert_name:
-                        continue
-                    fp = _pem_to_sha1(cert.get_pem())
-                    if fp and fp == local_fp:
-                        return True
+        # LocalMachine\Root（默认作用域）
+        if _root_store_contains([]):
+            return True
+        # CurrentUser\Root
+        if _root_store_contains(['-user']):
+            return True
         return False
     elif platform.system() == 'Darwin':
         try:
