@@ -1,7 +1,7 @@
 import mitmproxy.http
 import mitmproxy.ctx
 import json
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 import time
 from typing import Optional
 from bs4 import BeautifulSoup
@@ -21,6 +21,22 @@ def cookie_header_to_set_cookie(cookie_header):
 def get_first(query_params, key):
     value = query_params.get(key, [None])[0]
     return value if value else None
+
+
+def build_profile_ext_url(biz, uin, key, pass_ticket):
+    params = {
+        "action": "getmsg",
+        "__biz": biz,
+        "offset": "0",
+        "count": "10",
+        "uin": uin,
+        "key": key,
+        "pass_ticket": pass_ticket,
+        "f": "json",
+        "is_ok": "1",
+        "scene": "124",
+    }
+    return "https://mp.weixin.qq.com/mp/profile_ext?" + urlencode(params)
 
 
 def extract_set_cookie(flow):
@@ -91,15 +107,18 @@ class ExtractWxCredentials:
         except Exception as e:
             print(f"加载已有 credentials.json 失败: {e}")
 
-    def save_credentials(self, biz, url, set_cookie_header, name=None, avatar=None):
-        path = urlparse(url).path
+    def save_credentials(self, biz, url, set_cookie_header, name=None, avatar=None, source_url=None):
+        source = source_url or url
+        path = urlparse(source).path
         print(f'命中请求: biz={biz}, path={path}')
+        existing = self.cookies.get(biz, {})
         self.cookies[biz] = {
             "biz": biz,
-            "name": name,
-            "avatar": avatar,
+            "name": name or existing.get("name"),
+            "avatar": avatar or existing.get("avatar"),
             "url": url,
             "set_cookie": set_cookie_header,
+            "source_url": source,
             "timestamp": int(time.time() * 1000),
         }
         if mitmproxy.ctx.options.credentials:
@@ -114,6 +133,7 @@ class ExtractWxCredentials:
                 set_cookie_header,
                 item.get("name"),
                 item.get("avatar"),
+                item.get("source_url"),
             )
             self.pending.pop(biz, None)
 
@@ -140,15 +160,17 @@ class ExtractWxCredentials:
             return
 
         name, avatar = extract_profile(flow.response.content)
+        credential_url = build_profile_ext_url(biz, uin, key, pass_ticket)
         self.pending[biz] = {
-            "url": flow.request.url,
+            "url": credential_url,
+            "source_url": flow.request.url,
             "name": name,
             "avatar": avatar,
         }
 
         usable_cookie = set_cookie_header or self.latest_set_cookie
         if usable_cookie:
-            self.save_credentials(biz, flow.request.url, usable_cookie, name, avatar)
+            self.save_credentials(biz, credential_url, usable_cookie, name, avatar, flow.request.url)
             self.pending.pop(biz, None)
         else:
             print(f'暂存请求: biz={biz}, path={parsed_url.path}, 等待 wap_sid2')
