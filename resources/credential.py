@@ -7,9 +7,57 @@ from typing import Optional
 from bs4 import BeautifulSoup
 
 
+def cookie_header_to_set_cookie(cookie_header):
+    if not cookie_header:
+        return None
+    parts = []
+    for item in cookie_header.split(';'):
+        item = item.strip()
+        if item and '=' in item:
+            parts.append(f"{item}; Path=/")
+    return ', '.join(parts) if parts else None
+
+
+def get_first(query_params, key):
+    value = query_params.get(key, [None])[0]
+    return value if value else None
+
+
+def extract_set_cookie(flow):
+    values = []
+    response_cookie = flow.response.headers.get("Set-Cookie")
+    request_cookie = cookie_header_to_set_cookie(flow.request.headers.get("Cookie"))
+    if response_cookie:
+        values.append(response_cookie)
+    if request_cookie:
+        values.append(request_cookie)
+    return ', '.join(values) if values else None
+
+
+def extract_profile(content):
+    name = None
+    avatar = None
+    if not content:
+        return name, avatar
+
+    try:
+        soup = BeautifulSoup(content, 'html.parser')
+        name_tag = soup.css.select_one('.wx_follow_nickname')
+        avatar_tag = soup.css.select_one('.wx_follow_avatar > img.wx_follow_avatar_pic')
+        if name_tag:
+            name = name_tag.get_text(strip=True)
+        if avatar_tag:
+            avatar = avatar_tag['src']
+    except Exception as e:
+        print(f"Error parsing HTML: {e}")
+    return name, avatar
+
+
 class ExtractWxCredentials:
     def __init__(self):
         self.cookies = {}
+        self.pending = {}
+        self.latest_set_cookie = None
 
     def load(self, loader):
         loader.add_option(
@@ -35,52 +83,75 @@ class ExtractWxCredentials:
                 biz = item.get('biz')
                 if biz:
                     self.cookies[biz] = item
+                    set_cookie = item.get('set_cookie')
+                    if set_cookie and 'wap_sid2=' in set_cookie:
+                        self.latest_set_cookie = set_cookie
         except FileNotFoundError:
             pass
         except Exception as e:
             print(f"加载已有 credentials.json 失败: {e}")
 
+    def save_credentials(self, biz, url, set_cookie_header, name=None, avatar=None):
+        path = urlparse(url).path
+        print(f'命中请求: biz={biz}, path={path}')
+        self.cookies[biz] = {
+            "biz": biz,
+            "name": name,
+            "avatar": avatar,
+            "url": url,
+            "set_cookie": set_cookie_header,
+            "timestamp": int(time.time() * 1000),
+        }
+        if mitmproxy.ctx.options.credentials:
+            with open(mitmproxy.ctx.options.credentials, "w", encoding="utf-8") as file:
+                json.dump(list(self.cookies.values()), file, indent=4, ensure_ascii=False)
+
+    def flush_pending_with_cookie(self, set_cookie_header):
+        for biz, item in list(self.pending.items()):
+            self.save_credentials(
+                biz,
+                item["url"],
+                set_cookie_header,
+                item.get("name"),
+                item.get("avatar"),
+            )
+            self.pending.pop(biz, None)
+
     def response(self, flow: mitmproxy.http.HTTPFlow):
         # 检查请求的 URL 是否符合过滤器
         parsed_url = urlparse(flow.request.url)
+        if parsed_url.netloc != 'mp.weixin.qq.com':
+            return
         print(parsed_url)
-        if parsed_url.path == '/s' and parsed_url.query.startswith("__biz="):
-            # 提取 __biz 参数
-            print(f'命中请求')
-            query_params = parse_qs(parsed_url.query)
-            biz = query_params.get('__biz', [None])[0]
-            if biz:
-                # 提取响应头中的 Set-Cookie 数据
-                set_cookie_header = flow.response.headers.get("Set-Cookie")
 
-                # 提取 HTML 中的信息
-                name = None
-                avatar = None
-                if flow.response.content:
-                    try:
-                        soup = BeautifulSoup(flow.response.content, 'html.parser')
-                        name_tag = soup.css.select_one('.wx_follow_nickname')
-                        avatar_tag = soup.css.select_one('.wx_follow_avatar > img.wx_follow_avatar_pic')
-                        if name_tag:
-                            name = name_tag.get_text(strip=True)
-                        if avatar_tag:
-                            avatar = avatar_tag['src']
-                    except Exception as e:
-                        print(f"Error parsing HTML: {e}")
+        set_cookie_header = extract_set_cookie(flow)
+        if set_cookie_header and 'wap_sid2=' in set_cookie_header:
+            self.latest_set_cookie = set_cookie_header
+            self.flush_pending_with_cookie(set_cookie_header)
+        else:
+            set_cookie_header = None
 
-                if set_cookie_header:
-                    self.cookies[biz] = {
-                        "biz": biz,
-                        "name": name,
-                        "avatar": avatar,
-                        "url": flow.request.url,
-                        "set_cookie": set_cookie_header,
-                        "timestamp": int(time.time() * 1000),
-                    }
-                    # 将 cookies 数据保存到文件中
-                    if mitmproxy.ctx.options.credentials:
-                        with open(mitmproxy.ctx.options.credentials, "w", encoding="utf-8") as file:
-                            json.dump(list(self.cookies.values()), file, indent=4, ensure_ascii=False)
+        query_params = parse_qs(parsed_url.query)
+        biz = get_first(query_params, '__biz')
+        uin = get_first(query_params, 'uin')
+        key = get_first(query_params, 'key')
+        pass_ticket = get_first(query_params, 'pass_ticket')
+        if not biz or not uin or not key or not pass_ticket:
+            return
+
+        name, avatar = extract_profile(flow.response.content)
+        self.pending[biz] = {
+            "url": flow.request.url,
+            "name": name,
+            "avatar": avatar,
+        }
+
+        usable_cookie = set_cookie_header or self.latest_set_cookie
+        if usable_cookie:
+            self.save_credentials(biz, flow.request.url, usable_cookie, name, avatar)
+            self.pending.pop(biz, None)
+        else:
+            print(f'暂存请求: biz={biz}, path={parsed_url.path}, 等待 wap_sid2')
 
 addons = [
     ExtractWxCredentials(),
