@@ -3,3 +3,4 @@ watchdog~=4.0.2
 websockets~=15.0
 rich~=14.0.0
 beautifulsoup4~=4.13.4
+rapidocr-onnxruntime~=1.2.3
